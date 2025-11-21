@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>霓虹对决 4.0：AI觉醒</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+            font-family: 'Segoe UI', 'Roboto', sans-serif;
+            user-select: none;
+        }
+        canvas {
+            background: radial-gradient(circle at center, #1a1a24 0%, #000000 100%);
+            box-shadow: 0 0 60px rgba(0, 255, 255, 0.15);
+            border: 1px solid #333;
+            display: none; /* 初始隐藏，显示菜单 */
+        }
+        
+        /* UI */
+        #game-ui {
+            position: absolute;
+            top: 15px;
+            width: 100%;
+            text-align: center;
+            pointer-events: none;
+            z-index: 10;
+            display: none;
+        }
+        .player-ui {
+            display: flex;
+            flex-direction: column;
+            width: 300px;
+            margin: 0 40px;
+        }
+        .bar-container {
+            height: 12px;
+            background: #222;
+            border: 1px solid #444;
+            transform: skewX(-20deg);
+            margin-bottom: 4px;
+            position: relative;
+        }
+        .hp-fill { height: 100%; transition: width 0.2s; }
+        .shield-fill { height: 100%; background: #00aaff; box-shadow: 0 0 5px #00aaff; transition: width 0.2s; position: absolute; top:0; left:0; opacity: 0.8; }
+        .p1-hp { background: #00eaff; box-shadow: 0 0 8px #00eaff; }
+        .p2-hp { background: #ff0055; box-shadow: 0 0 8px #ff0055; }
+        
+        /* Menu */
+        #menu {
+            position: absolute;
+            text-align: center;
+            z-index: 20;
+            background: rgba(0,0,0,0.8);
+            padding: 40px;
+            border: 2px solid #00eaff;
+            box-shadow: 0 0 30px #00eaff;
+            transform: skewX(-5deg);
+        }
+        h1 { margin: 0 0 20px; font-style: italic; letter-spacing: 5px; font-size: 40px; text-shadow: 4px 4px 0px #ff0055; }
+        button {
+            display: block;
+            width: 260px;
+            margin: 15px auto;
+            padding: 15px;
+            font-size: 18px;
+            background: transparent;
+            color: #fff;
+            border: 1px solid #fff;
+            cursor: pointer;
+            transition: 0.2s;
+            font-family: inherit;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        button:hover { background: #fff; color: #000; box-shadow: 0 0 15px #fff; }
+        
+        .controls {
+            position: absolute;
+            bottom: 15px;
+            width: 100%;
+            text-align: center;
+            font-size: 12px;
+            color: #555;
+            pointer-events: none;
+            display: none;
+        }
+        
+        /* Mute Button */
+        #mute-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 30;
+            cursor: pointer;
+            opacity: 0.5;
+            font-size: 24px;
+        }
+        #mute-btn:hover { opacity: 1; }
+    </style>
+</head>
+<body>
+
+<!-- 菜单 -->
+<div id="menu">
+    <h1>NEON COMBAT</h1>
+    <div style="font-size: 14px; color: #888; margin-bottom: 20px;">V 4.0 AI UPDATE</div>
+    <button onclick="startGame('ai')">单人模式 (VS AI)</button>
+    <button onclick="startGame('pvp')">双人对战 (1v1)</button>
+</div>
+
+<!-- 游戏内UI -->
+<div id="game-ui">
+    <div id="msg" style="font-size: 24px; font-weight: bold; text-shadow: 0 0 10px #fff; margin-bottom: 10px;"></div>
+    <div style="display:flex; justify-content:center; align-items: flex-start;">
+        <div class="player-ui" style="align-items: flex-end;">
+            <div style="color:#00eaff; font-weight:bold; margin-bottom:5px; font-size:18px;">PLAYER 1 <span id="w1" style="font-size:12px; color:#aaa"></span></div>
+            <div class="bar-container" style="width: 100%;">
+                <div id="hp1" class="hp-fill p1-hp" style="width:100%"></div>
+                <div id="sh1" class="shield-fill" style="width:0%"></div>
+            </div>
+        </div>
+        <div style="font-weight:bold; font-size: 24px; color:#444; padding: 0 10px;">VS</div>
+        <div class="player-ui" style="align-items: flex-start;">
+            <div style="color:#ff0055; font-weight:bold; margin-bottom:5px; font-size:18px;">PLAYER 2 <span id="w2" style="font-size:12px; color:#aaa"></span></div>
+            <div class="bar-container" style="width: 100%;">
+                <div id="hp2" class="hp-fill p2-hp" style="width:100%"></div>
+                <div id="sh2" class="shield-fill" style="width:0%"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="mute-btn" onclick="toggleAudio()">🔊</div>
+
+<div class="controls" id="controls-hint">
+    [P1] WASD 移动/二段跳 | G 射击 <span id="p2-hint">&nbsp;&nbsp;&nbsp; [P2] 方向键 移动/二段跳 | 小键盘1 或 L 射击</span>
+</div>
+
+<canvas id="gameCanvas" width="1000" height="600"></canvas>
+
+<script>
+/** 
+ * 音频系统 (Web Audio API) 
+ * 使用代码合成音效，无需外部文件
+ */
+const AudioSys = (() => {
+    let ctx = null;
+    let masterGain = null;
+    let isMuted = false;
+    let bgmOscillators = [];
+    let bgmInterval = null;
+
+    function init() {
+        if (!ctx) {
+            ctx = new (window.AudioContext || window.webkitAudioContext)();
+            masterGain = ctx.createGain();
+            masterGain.gain.value = 0.3; // 总音量
+            masterGain.connect(ctx.destination);
+        }
+    }
+
+    function playTone(freq, type, duration, vol=1, slideFreq=null) {
+        if (isMuted || !ctx) return;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        if (slideFreq) {
+            osc.frequency.exponentialRampToValueAtTime(slideFreq, ctx.currentTime + duration);
+        }
+        gain.gain.setValueAtTime(vol, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+        
+        osc.connect(gain);
+        gain.connect(masterGain);
+        osc.start();
+        osc.stop(ctx.currentTime + duration);
+    }
+
+    function playNoise(duration, vol=1) {
+        if (isMuted || !ctx) return;
+        const bufferSize = ctx.sampleRate * duration;
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+        const noise = ctx.createBufferSource();
+        noise.buffer = buffer;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(vol, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+        noise.connect(gain);
+        gain.connect(masterGain);
+        noise.start();
+    }
+
+    return {
+        init: init,
+        toggleMute: () => {
+            isMuted = !isMuted;
+            if(masterGain) masterGain.gain.value = isMuted ? 0 : 0.3;
+            document.getElementById('mute-btn').innerText = isMuted ? '🔇' : '🔊';
+        },
+        shoot: (type) => {
+            if (type === 'sniper') playTone(800, 'square', 0.3, 0.5, 100); // 激光音
+            else if (type === 'shotgun') playNoise(0.2, 0.8); // 爆炸音
+            else if (type === 'bazooka') playTone(150, 'sawtooth', 0.5, 0.6, 50); // 发射音
+            else playTone(400, 'triangle', 0.1, 0.3, 200); // 默认手枪
+        },
+        jump: () => playTone(150, 'sine', 0.2, 0.3, 300),
+        explosion: () => {
+            playNoise(0.5, 1.0);
+            playTone(100, 'sawtooth', 0.4, 0.8, 10);
+        },
+        pickup: (type) => {
+            if (type === 'WEAPON') playTone(600, 'square', 0.1, 0.4, 1200);
+            else if (type === 'HEALTH') playTone(400, 'sine', 0.3, 0.5, 600);
+            else playTone(300, 'sine', 0.4, 0.5, 800);
+        },
+        startBGM: () => {
+            if (bgmInterval) return;
+            let step = 0;
+            // 简单的赛博朋克Bassline循环
+            const bassLine = [110, 110, 0, 110, 130, 0, 146, 146]; 
+            bgmInterval = setInterval(() => {
+                if (!isMuted && ctx) {
+                    const freq = bassLine[step % 8];
+                    if (freq > 0) playTone(freq, 'sawtooth', 0.15, 0.15);
+                    // Hi-hat
+                    if (step % 2 === 0) playNoise(0.05, 0.05);
+                }
+                step++;
+            }, 250); // 120 BPM approx
+        },
+        stopBGM: () => {
+            clearInterval(bgmInterval);
+            bgmInterval = null;
+        }
+    };
+})();
+
+// --- 游戏核心逻辑 ---
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const uiMsg = document.getElementById('msg');
+const menuDiv = document.getElementById('menu');
+const gameUiDiv = document.getElementById('game-ui');
+const controlsHint = document.getElementById('controls-hint');
+
+// 配置
+const GRAVITY = 0.5;
+const FRICTION = 0.82;
+const GROUND_Y = 540;
+const JUMP_FORCE = -11;
+const MAX_JUMPS = 2;
+
+// 物品定义
+const ITEM_TYPES = {
+    WEAPON: { color: '#ffd700', symbol: '?' },
+    HEALTH: { color: '#00ff66', symbol: '+' },
+    SHIELD: { color: '#00aaff', symbol: 'S' }
+};
+
+const WEAPONS = {
+    DEFAULT: { id: 'default', name: '脉冲手枪', color: '#00eaff', damage: 9, speed: 14, delay: 18, count: 1, spread: 0.05, recoil: 1 },
+    SHOTGUN: { id: 'shotgun', name: '破碎散弹', color: '#ffaa00', damage: 6, speed: 12, delay: 50, count: 6, spread: 0.25, life: 25, recoil: 7 },
+    SNIPER:  { id: 'sniper',  name: '电磁狙击', color: '#00ff00', damage: 35, speed: 40, delay: 90, count: 1, spread: 0, recoil: 4 },
+    BAZOOKA: { id: 'bazooka', name: '毁灭火炮', color: '#ff0000', damage: 0, speed: 14, delay: 70, count: 1, spread: 0, explosive: true, blastR: 110, blastDmg: 40, recoil: 5 }
+};
+
+// 全局状态
+let keys = {};
+let screenShake = 0;
+let time = 0;
+let gameMode = 'pvp'; // 'pvp' or 'ai'
+let loopId = null;
+let isGameOver = false;
+
+// --- AI 控制器 (疯狗模式) ---
+class AIController {
+    constructor(player) {
+        this.p = player;
+        this.thinkTimer = 0;
+        this.inputs = { up: false, left: false, right: false, shoot: false };
+    }
+
+    update(enemies, crates, platforms) {
+        const enemy = enemies[0];
+        // 1. 提升反应速度: 每2帧思考一次 (之前是3帧)，反应更快
+        this.thinkTimer++;
+        if (this.thinkTimer % 2 !== 0) return this.inputs; 
+
+        // 重置输入
+        this.inputs.left = false;
+        this.inputs.right = false;
+        this.inputs.up = false;
+        this.inputs.shoot = false;
+
+        // 2. 决策目标: 只有在极度危险(HP<30)或只有手枪时才优先找箱子，否则死磕敌人
+        let target = enemy;
+        let mode = 'ATTACK'; // ATTACK, LOOT
+
+        // 降低寻找道具的优先级，增加压迫感
+        if (this.p.hp < 30 || (this.p.weapon.id === 'default' && crates.length > 0)) {
+            let bestCrate = null;
+            let minDist = 9999;
+            crates.forEach(c => {
+                const dist = Math.abs(c.x - this.p.x) + Math.abs(c.y - this.p.y); // 曼哈顿距离估算
+                if (dist < minDist) {
+                    minDist = dist;
+                    bestCrate = c;
+                }
+            });
+            if (bestCrate) {
+                target = bestCrate;
+                mode = 'LOOT';
+            }
+        }
+        
+        // 3. 移动逻辑
+        const dx = target.x - this.p.x;
+        const dy = target.y - this.p.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+
+        // 水平追踪
+        if (dx > 20) this.inputs.right = true;
+        else if (dx < -20) this.inputs.left = true;
+
+        // 垂直机动 / 跳跃
+        const stuck = (this.inputs.left || this.inputs.right) && Math.abs(this.p.vx) < 1;
+        
+        // 更加积极的跳跃：遇到高处目标、卡住、或者为了躲避子弹(随机跳)
+        if ((dy < -50 && Math.abs(dx) < 200) || stuck || (mode === 'ATTACK' && Math.random() < 0.05)) {
+            this.inputs.up = true;
+        } else {
+            this.inputs.up = false;
+        }
+        
+        // 二段跳进攻：如果是火箭筒，喜欢跳起来往下打
+        if (this.p.weapon.id === 'bazooka' && this.p.vy > -2 && mode === 'ATTACK' && this.p.jumps < 2) {
+             this.inputs.up = true;
+        }
+
+        // 4. 攻击逻辑 (极具攻击性)
+        if (mode === 'ATTACK') {
+            // 武器特定的走位
+            // 散弹枪：骑脸输出 (距离 > 100 就一直冲)
+            if (this.p.weapon.id === 'shotgun' && dist > 100) {
+                // 保持冲锋，不需要额外操作
+            }
+            // 狙击/火箭：保持距离 (拉扯)
+            else if ((this.p.weapon.id === 'sniper' || this.p.weapon.id === 'bazooka') && dist < 300) {
+                if (dx > 0) { this.inputs.right = false; this.inputs.left = true; }
+                else { this.inputs.left = false; this.inputs.right = true; }
+            }
+
+            // 射击判定
+            const facingTarget = (this.p.facing === 1 && dx > 0) || (this.p.facing === -1 && dx < 0);
+            
+            // 瞄准更宽容，但射击频率更高
+            if (facingTarget && Math.abs(dy) < 100) {
+                // 狙击枪瞄准久一点，其他武器疯狂扣扳机
+                let shootProb = 0.3; // 30% 概率每判定帧开火 (很高)
+                if (this.p.weapon.id === 'sniper') shootProb = 0.15; 
+                if (this.p.weapon.id === 'shotgun' && dist > 250) shootProb = 0.01; // 散弹太远不开枪
+                
+                // 防自爆逻辑保留
+                if (this.p.weapon.id === 'bazooka' && dist < 140) shootProb = 0;
+
+                if (Math.random() < shootProb) this.inputs.shoot = true;
+            }
+        }
+
+        return this.inputs;
+    }
+}
+// --- 类定义 (复用之前的，微调) ---
+
+function drawRect(x, y, w, h, color, glow=false) {
+    ctx.fillStyle = color;
+    if (glow) { ctx.shadowBlur = 15; ctx.shadowColor = color; }
+    ctx.fillRect(x, y, w, h);
+    if (glow) ctx.shadowBlur = 0;
+}
+
+class Player {
+    constructor(x, y, color, controls, faceRight, isBot=false) {
+        this.x = x; this.y = y;
+        this.w = 30; this.h = 54;
+        this.vx = 0; this.vy = 0;
+        this.color = color;
+        this.hp = 100;
+        this.shield = 0;
+        this.weapon = WEAPONS.DEFAULT;
+        this.cooldown = 0;
+        this.controls = controls; // 键位或AI控制器
+        this.isBot = isBot;
+        this.ai = isBot ? new AIController(this) : null;
+        this.facing = faceRight ? 1 : -1;
+        this.jumps = 0;
+        this.grounded = false;
+        this.flash = 0;
+        this.dead = false;
+        this.animY = 0; 
+        this.jumpKeyReleased = true;
+    }
+
+    update(enemies, crates, platforms) {
+        if (this.dead) return;
+
+        // 获取输入
+        let input = { up: false, left: false, right: false, shoot: false };
+        
+        if (this.isBot) {
+            input = this.ai.update(enemies, crates, platforms);
+        } else {
+            input.up = keys[this.controls.up];
+            input.left = keys[this.controls.left];
+            input.right = keys[this.controls.right];
+            input.shoot = keys[this.controls.shoot];
+        }
+
+        // 移动
+        if (input.left) { this.vx -= 1.2; this.facing = -1; }
+        if (input.right) { this.vx += 1.2; this.facing = 1; }
+        
+        // 跳跃 (二段跳逻辑)
+        if (input.up) {
+            if (this.jumpKeyReleased) {
+                if (this.grounded) {
+                    this.jump();
+                } else if (this.jumps < MAX_JUMPS) {
+                    this.jump();
+                    createDust(this.x + this.w/2, this.y + this.h, 5, '#fff');
+                }
+                this.jumpKeyReleased = false;
+            }
+        } else {
+            this.jumpKeyReleased = true;
+        }
+
+        // 射击
+        if (this.cooldown > 0) this.cooldown--;
+        if (input.shoot && this.cooldown <= 0) {
+            this.shoot();
+        }
+
+        // 物理
+        this.vy += GRAVITY;
+        this.vx *= FRICTION;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.animY = Math.sin(time * 0.1) * 2;
+
+        this.checkCollisions();
+        if (this.flash > 0) this.flash--;
+    }
+
+    jump() {
+        this.vy = JUMP_FORCE;
+        this.grounded = false;
+        this.jumps++;
+        AudioSys.jump();
+    }
+
+    checkCollisions() {
+        if (this.x < 0) { this.x = 0; this.vx = 0; }
+        if (this.x + this.w > canvas.width) { this.x = canvas.width - this.w; this.vx = 0; }
+
+        let onPlatform = false;
+        if (this.y + this.h >= GROUND_Y) {
+            this.y = GROUND_Y - this.h;
+            this.vy = 0;
+            this.grounded = true;
+            this.jumps = 0;
+            onPlatform = true;
+        }
+        platforms.forEach(p => {
+            if (this.vy >= 0 && this.y + this.h <= p.y + p.h + this.vy + 2 && this.y + this.h >= p.y - 5 &&
+                this.x + this.w > p.x && this.x < p.x + p.w) {
+                this.y = p.y - this.h;
+                this.vy = 0;
+                this.grounded = true;
+                this.jumps = 0;
+                onPlatform = true;
+            }
+        });
+        if (!onPlatform && this.y + this.h < GROUND_Y) this.grounded = false;
+    }
+
+    shoot() {
+        this.cooldown = this.weapon.delay;
+        const barrelX = this.x + this.w/2 + (this.facing * 20);
+        const barrelY = this.y + 20 + this.animY;
+        
+        this.vx -= this.facing * this.weapon.recoil;
+        screenShake = Math.min(screenShake + this.weapon.recoil, 15);
+        
+        AudioSys.shoot(this.weapon.id); // 音效
+
+        for(let i=0; i<this.weapon.count; i++) {
+            let angle = (Math.random() - 0.5) * this.weapon.spread;
+            let vyOffset = 0;
+            if (this.weapon.id === 'bazooka') { vyOffset = -2; angle = 0; }
+            const speed = this.weapon.speed;
+            const bvx = Math.cos(angle) * speed * this.facing;
+            const bvy = Math.sin(angle) * speed + vyOffset;
+            bullets.push(new Bullet(barrelX, barrelY, bvx, bvy, this.weapon, this));
+        }
+    }
+
+    takeDamage(dmg) {
+        if (this.dead) return;
+        if (this.shield > 0) {
+            const shieldDmg = Math.min(this.shield, dmg);
+            this.shield -= shieldDmg;
+            dmg -= shieldDmg;
+            createSpark(this.x+this.w/2, this.y+this.h/2, '#00aaff');
+        }
+        if (dmg > 0) {
+            this.hp -= dmg;
+            this.flash = 4;
+            createBlood(this.x + this.w/2, this.y + this.h/2, this.color);
+        }
+        screenShake = 6;
+        if (this.hp <= 0) {
+            this.hp = 0;
+            this.dead = true;
+            AudioSys.explosion();
+            createExplosion(this.x, this.y, this.color, 50);
+            endGame(this === p1 ? p2 : p1);
+        }
+    }
+
+    draw() {
+        if (this.dead) return;
+        const drawX = this.x;
+        const drawY = this.y + this.animY;
+        const c = this.flash > 0 ? '#fff' : this.color;
+
+        ctx.save();
+        // 护盾
+        if (this.shield > 0) {
+            ctx.strokeStyle = '#00aaff'; ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.4 + (Math.sin(time*0.2)*0.1);
+            ctx.strokeRect(drawX - 4, drawY - 4, this.w + 8, 30 + 8);
+            ctx.globalAlpha = 1;
+        }
+        // 狙击红线
+        if (this.weapon.id === 'sniper') {
+            ctx.beginPath();
+            ctx.moveTo(drawX+this.w/2, drawY + 20);
+            ctx.lineTo(drawX+this.w/2 + this.facing * 1000, drawY + 20);
+            ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)'; ctx.lineWidth = 1;
+            ctx.setLineDash([5, 5]); ctx.stroke(); ctx.setLineDash([]);
+        }
+        // 本体
+        ctx.fillStyle = '#222'; ctx.fillRect(drawX + 5, drawY + 35, 8, 19); ctx.fillRect(drawX + 17, drawY + 35, 8, 19);
+        drawRect(drawX, drawY + 10, this.w, 30, c, false); 
+        drawRect(drawX + 10, drawY + 18, 10, 8, '#fff', true);
+        // 头盔
+        drawRect(drawX + 2, drawY - 6, 26, 20, '#222');
+        const visorX = this.facing === 1 ? drawX + 14 : drawX + 4;
+        drawRect(visorX, drawY, 12, 6, c, true);
+        // 喷气背包
+        if (this.jumps > 0) { ctx.fillStyle = '#444'; ctx.fillRect(drawX + (this.facing===1?-4:24), drawY + 15, 6, 15); }
+        // 武器
+        this.drawWeapon(drawX, drawY);
+        
+        // AI 标记
+        if (this.isBot) {
+            ctx.fillStyle = '#fff'; ctx.font='10px Arial'; ctx.fillText("CPU", drawX+5, drawY-10);
+        }
+        
+        ctx.restore();
+    }
+
+    drawWeapon(x, y) {
+        const wx = x + this.w/2 + (this.facing * 10);
+        const wy = y + 20;
+        ctx.fillStyle = '#888';
+        if (this.weapon.id === 'default') {
+            ctx.fillRect(wx - 5, wy - 2, 16, 6); ctx.fillStyle = this.weapon.color; ctx.fillRect(wx + 8, wy - 2, 3, 6);
+        } else if (this.weapon.id === 'shotgun') {
+            ctx.fillStyle = '#554422'; ctx.fillRect(wx - 10, wy - 2, 24, 8);
+        } else if (this.weapon.id === 'sniper') {
+            ctx.fillStyle = '#334433'; ctx.fillRect(wx - 10, wy - 2, 40, 5); ctx.fillStyle = '#111'; ctx.fillRect(wx - 5, wy - 6, 10, 4);
+        } else if (this.weapon.id === 'bazooka') {
+            ctx.fillStyle = '#442222'; ctx.fillRect(wx - 15, wy - 10, 35, 12);
+        }
+    }
+}
+
+class Bullet {
+    constructor(x, y, vx, vy, type, owner) {
+        this.x = x; this.y = y; this.vx = vx; this.vy = vy;
+        this.type = type; this.owner = owner; this.active = true; this.life = type.life || 100;
+    }
+    update() {
+        this.x += this.vx; this.y += this.vy; this.life--;
+        if (this.type.id === 'bazooka') { this.vy += 0.15; if (Math.random() < 0.5) createDust(this.x, this.y, 1, '#555'); }
+        
+        // 边界/平台碰撞
+        if (this.x < 0 || this.x > canvas.width || this.y > GROUND_Y || this.life <= 0) { this.hit(); return; }
+        platforms.forEach(p => { if (this.x > p.x && this.x < p.x + p.w && this.y > p.y && this.y < p.y + p.h) this.hit(); });
+        
+        // 玩家碰撞
+        const target = this.owner === p1 ? p2 : p1;
+        if (!target.dead && this.x > target.x && this.x < target.x + target.w && this.y > target.y && this.y < target.y + target.h) {
+            if (!this.type.explosive) target.takeDamage(this.type.damage);
+            this.hit();
+        }
+    }
+    hit() {
+        this.active = false;
+        if (this.type.explosive) {
+            createExplosion(this.x, this.y, '#ffaa00', 15);
+            createExplosion(this.x, this.y, '#fff', 8);
+            AudioSys.explosion();
+            screenShake = 20;
+            [p1, p2].forEach(p => {
+                if (p.dead) return;
+                const dist = Math.sqrt(Math.pow((p.x + p.w/2) - this.x, 2) + Math.pow((p.y + p.h/2) - this.y, 2));
+                if (dist < this.type.blastR) {
+                    const dmg = this.type.blastDmg * (1 - dist/this.type.blastR);
+                    p.takeDamage(Math.floor(dmg));
+                }
+            });
+        } else {
+            createSpark(this.x, this.y, this.type.color);
+        }
+    }
+    draw() {
+        ctx.fillStyle = this.type.color;
+        if (this.type.id === 'sniper') {
+            ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(Math.atan2(this.vy, this.vx));
+            ctx.fillRect(-10, -1, 20, 2); ctx.restore();
+        } else if (this.type.id === 'bazooka') {
+            ctx.beginPath(); ctx.arc(this.x, this.y, 5, 0, Math.PI*2); ctx.fill();
+        } else {
+            ctx.fillRect(this.x-2, this.y-2, 4, 4);
+        }
+    }
+}
+
+class Particle {
+    constructor(x, y, vx, vy, color, life, size) {
+        this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.color = color; this.life = life; this.maxLife = life; this.size = size;
+    }
+    update() { this.x += this.vx; this.y += this.vy; this.life--; this.size *= 0.95; }
+    draw() { ctx.globalAlpha = this.life / this.maxLife; ctx.fillStyle = this.color; ctx.fillRect(this.x, this.y, this.size, this.size); ctx.globalAlpha = 1.0; }
+}
+
+class Crate {
+    constructor(x, y) {
+        this.x = x; this.y = y;
+        const rand = Math.random();
+        if (rand < 0.6) {
+            this.type = ITEM_TYPES.WEAPON;
+            this.content = [WEAPONS.SHOTGUN, WEAPONS.SNIPER, WEAPONS.BAZOOKA][Math.floor(Math.random()*3)];
+        } else if (rand < 0.8) {
+            this.type = ITEM_TYPES.HEALTH; this.content = 'HEAL';
+        } else {
+            this.type = ITEM_TYPES.SHIELD; this.content = 'SHIELD';
+        }
+        this.floatOffset = Math.random() * 100;
+        this.active = true;
+    }
+    update() {
+        const dy = Math.sin((time + this.floatOffset) * 0.05) * 5;
+        const drawY = this.y + dy;
+        drawRect(this.x, drawY, 24, 24, this.type.color, true);
+        ctx.fillStyle = '#000'; ctx.font = 'bold 16px Arial'; ctx.fillText(this.type.symbol, this.x+7, drawY+18);
+
+        [p1, p2].forEach(p => {
+            if (!p.dead && p.x < this.x + 24 && p.x + p.w > this.x && p.y < drawY + 24 && p.y + p.h > drawY) {
+                this.active = false;
+                createSpark(this.x+12, drawY+12, this.type.color);
+                AudioSys.pickup(this.type === ITEM_TYPES.WEAPON ? 'WEAPON' : 'ITEM');
+                
+                let msg = "";
+                if (this.type === ITEM_TYPES.WEAPON) { p.weapon = this.content; p.cooldown = 30; msg = this.content.name; } 
+                else if (this.type === ITEM_TYPES.HEALTH) { p.hp = Math.min(p.hp + 30, 100); msg = "HP RESTORED"; } 
+                else if (this.type === ITEM_TYPES.SHIELD) { p.shield = 50; msg = "SHIELD ACTIVE"; }
+                
+                uiMsg.innerText = msg; uiMsg.style.color = this.type.color;
+                setTimeout(() => { if(!isGameOver) uiMsg.innerText = "NEON COMBAT"; uiMsg.style.color='#fff' }, 1500);
+            }
+        });
+    }
+}
+
+// --- 辅助函数 ---
+function createDust(x, y, count, color='#888') { for(let i=0; i<count; i++) particles.push(new Particle(x, y, (Math.random()-0.5)*2, -Math.random()*2, color, 20+Math.random()*10, 4)); }
+function createSpark(x, y, color) { for(let i=0; i<8; i++) particles.push(new Particle(x, y, (Math.random()-0.5)*4, (Math.random()-0.5)*4, color, 15, 3)); }
+function createBlood(x, y, color) { for(let i=0; i<15; i++) particles.push(new Particle(x, y, (Math.random()-0.5)*5, (Math.random()-0.5)*5, color, 30, 5)); }
+function createExplosion(x, y, color, count) { for(let i=0; i<count; i++) particles.push(new Particle(x, y, (Math.random()-0.5)*6, (Math.random()-0.5)*6, color, 40, 6)); }
+
+// --- 游戏管理 ---
+let p1, p2, bullets, particles, crates;
+let platforms = [
+    {x: 150, y: 420, w: 150, h: 15}, {x: 700, y: 420, w: 150, h: 15},
+    {x: 350, y: 300, w: 300, h: 15}, {x: 50, y: 180, w: 120, h: 15},
+    {x: 830, y: 180, w: 120, h: 15}, {x: 450, y: 120, w: 100, h: 15}
+];
+
+function toggleAudio() { AudioSys.toggleMute(); }
+
+function startGame(mode) {
+    gameMode = mode;
+    menuDiv.style.display = 'none';
+    canvas.style.display = 'block';
+    gameUiDiv.style.display = 'block';
+    controlsHint.style.display = 'block';
+    
+    if (mode === 'ai') {
+        document.getElementById('p2-hint').innerText = " [CPU] 自动战斗";
+    } else {
+        document.getElementById('p2-hint').innerText = " [P2] 方向键 移动 | L 射击";
+    }
+    
+    AudioSys.init();
+    AudioSys.startBGM();
+    initGame();
+    loopId = requestAnimationFrame(loop);
+}
+
+function initGame() {
+    p1 = new Player(100, 300, '#00eaff', {up:'w', left:'a', right:'d', shoot:'g'}, true, false);
+    // P2 根据模式决定是否为 Bot
+    p2 = new Player(870, 300, '#ff0055', {up:'ArrowUp', left:'ArrowLeft', right:'ArrowRight', shoot:'l'}, false, gameMode === 'ai');
+    
+    bullets = []; particles = []; crates = [];
+    isGameOver = false; screenShake = 0;
+    uiMsg.innerText = "NEON COMBAT"; uiMsg.style.color = '#fff';
+    updateUI();
+}
+
+function endGame(winner) {
+    isGameOver = true;
+    uiMsg.innerText = (winner === p1 ? "PLAYER 1" : "PLAYER 2") + " WINS! (按 R 重开)";
+    uiMsg.style.color = winner.color;
+}
+
+function updateUI() {
+    document.getElementById('hp1').style.width = p1.hp + '%';
+    document.getElementById('sh1').style.width = p1.shield * 2 + '%';
+    document.getElementById('w1').innerText = p1.weapon.name;
+
+    document.getElementById('hp2').style.width = p2.hp + '%';
+    document.getElementById('sh2').style.width = p2.shield * 2 + '%';
+    document.getElementById('w2').innerText = p2.weapon.name;
+}
+
+function loop() {
+    time++;
+    // 绘制背景
+    ctx.save();
+    if (screenShake > 0) {
+        ctx.translate((Math.random()-0.5)*screenShake, (Math.random()-0.5)*screenShake);
+        screenShake *= 0.9; if (screenShake < 0.5) screenShake = 0;
+    }
+
+    ctx.fillStyle = '#0a0a10'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // 网格线
+    ctx.strokeStyle = 'rgba(0, 255, 255, 0.1)'; ctx.lineWidth = 1;
+    const offset = (time * 0.5) % 40;
+    ctx.beginPath();
+    for(let i=0; i<=canvas.width; i+=40) { ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); }
+    for(let i=offset; i<=canvas.height; i+=40) { ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); }
+    ctx.stroke();
+
+    // 平台绘制
+    ctx.fillStyle = '#111'; ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height-GROUND_Y);
+    ctx.strokeStyle = '#00eaff'; ctx.beginPath(); ctx.moveTo(0, GROUND_Y); ctx.lineTo(canvas.width, GROUND_Y); ctx.stroke();
+    platforms.forEach(p => {
+        ctx.fillStyle = '#222'; ctx.fillRect(p.x, p.y, p.w, p.h);
+        ctx.fillStyle = '#444'; ctx.fillRect(p.x, p.y, p.w, 2);
+        ctx.fillStyle = 'rgba(0,255,255,0.2)'; ctx.fillRect(p.x, p.y+2, p.w, 4);
+    });
+
+    if (!isGameOver) {
+        // 掉落
+        if (Math.random() < 0.008 && crates.length < 2) {
+            const p = platforms[Math.floor(Math.random()*platforms.length)];
+            crates.push(new Crate(p.x + p.w/2 - 12, p.y - 50));
+        }
+        
+        // 更新实体
+        p1.update([p2], crates, platforms);
+        p2.update([p1], crates, platforms);
+        
+        bullets.forEach(b => b.update());
+        particles.forEach(p => p.update());
+        crates.forEach(c => c.update());
+        
+        bullets = bullets.filter(b => b.active);
+        particles = particles.filter(p => p.life > 0);
+        crates = crates.filter(c => c.active);
+    }
+
+    crates.forEach(c => c.update()); 
+    p1.draw(); p2.draw();
+    bullets.forEach(b => b.draw());
+    particles.forEach(p => p.draw());
+
+    ctx.restore();
+    updateUI();
+    requestAnimationFrame(loop);
+}
+
+// 监听
+window.addEventListener('keydown', e => {
+    keys[e.key] = true;
+    if (e.key === '1' || e.key === 'Num1') keys['l'] = true;
+    if (isGameOver && e.key.toLowerCase() === 'r') initGame();
+});
+window.addEventListener('keyup', e => {
+    keys[e.key] = false;
+    if (e.key === '1' || e.key === 'Num1') keys['l'] = false;
+});
+
+</script>
+</body>
+</html>
